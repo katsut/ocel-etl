@@ -1,0 +1,21 @@
+[package]
+name = "ocel-etl"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/katsut/ocel-etl"
+description = "Generic ETL pipeline engine for OCEL 2.0 process mining"
+
+[dependencies]
+ocel-core = { version = "0.1.0", optional = true }
+serde = { version = "1", features = ["derive"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
