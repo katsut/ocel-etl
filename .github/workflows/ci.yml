@@ -37,3 +37,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  compliance:
+    name: Compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Organizational-context scan
+        run: |
+          # 公開物に社内文脈（組織フレーミング）を出さない。ワークフロー自身は検査対象外。
+          if git grep -nI -e 自社 -e 弊社 -e 当社 -e 社内 -e 自部門 -- ':!.github/'; then
+            echo "::error::組織文脈語を検出しました。公開リポジトリには含めないでください。"
+            exit 1
+          fi
+      - name: Author-email allowlist
+        if: github.event_name == 'pull_request'
+        run: |
+          # 新規コミットの著者メールは GitHub noreply のみ許可（個人メール混入防止）。
+          range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          bad=$(git log --format='%an <%ae>' "$range" | grep -viE '@users\.noreply\.github\.com>$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::noreply 以外の著者メールを含むコミットがあります:"
+            printf '%s\n' "$bad"
+            exit 1
+          fi
