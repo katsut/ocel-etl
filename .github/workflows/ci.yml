@@ -56,24 +56,21 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Organizational-context scan
+      - name: Wordlist check
         run: |
-          # Keep internal organizational framing out of public artifacts.
-          # The grep terms are Japanese org-context words by design; the
-          # workflow itself is excluded from the scan.
-          if git grep -nI -e 自社 -e 弊社 -e 当社 -e 社内 -e 自部門 -- ':!.github/'; then
-            echo "::error::Organizational-context wording detected; keep it out of this public repository."
+          # Fail when a word from .github/blocked-words.txt appears in tracked files.
+          if git grep -nI -f .github/blocked-words.txt -- ':!.github/'; then
+            echo "::error::Blocked word found."
             exit 1
           fi
-      - name: Author-email allowlist
+      - name: Author email check
         if: github.event_name == 'pull_request'
         run: |
-          # Only GitHub noreply author emails are allowed on new commits
-          # (prevents leaking personal addresses).
+          # New commits must use a GitHub noreply author email.
           range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
           bad=$(git log --format='%an <%ae>' "$range" | grep -viE '@users\.noreply\.github\.com>$' || true)
           if [ -n "$bad" ]; then
-            echo "::error::Commits with non-noreply author emails found:"
+            echo "::error::Commits must use a GitHub noreply author email:"
             printf '%s\n' "$bad"
             exit 1
           fi
