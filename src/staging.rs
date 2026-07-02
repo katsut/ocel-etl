@@ -79,6 +79,54 @@ impl StagingLog {
         Self::default()
     }
 
+    /// Re-stage an existing log so further data can merge into it (the basis
+    /// for incremental sync). Schemas are seeded from the declarations, so
+    /// attribute types survive the round trip.
+    ///
+    /// Once a log has passed the gate, `from_ocel(log).into_ocel()`
+    /// reproduces it unchanged.
+    #[must_use]
+    pub fn from_ocel(ocel: Ocel) -> Self {
+        let mut staging = Self::new();
+        for event_type in &ocel.event_types {
+            staging
+                .event_schema
+                .insert(event_type.name.clone(), seed(&event_type.attributes));
+        }
+        for object_type in &ocel.object_types {
+            staging
+                .object_schema
+                .insert(object_type.name.clone(), seed(&object_type.attributes));
+        }
+        for object in ocel.objects {
+            staging.upsert_object(&object.id, &object.object_type);
+            for attr in object.attributes {
+                staging.add_object_attribute(&object.id, &attr.name, attr.value, attr.time);
+            }
+            for rel in object.relationships {
+                staging.add_o2o(&object.id, &rel.object_id, &rel.qualifier);
+            }
+        }
+        for event in ocel.events {
+            staging.add_event(StagingEvent {
+                id: event.id,
+                event_type: event.event_type,
+                time: event.time,
+                attributes: event
+                    .attributes
+                    .into_iter()
+                    .map(|a| (a.name, a.value))
+                    .collect(),
+                relations: event
+                    .relationships
+                    .into_iter()
+                    .map(|r| (r.object_id, r.qualifier))
+                    .collect(),
+            });
+        }
+        staging
+    }
+
     /// Add an event (any order; its object references may not exist yet).
     pub fn add_event(&mut self, event: StagingEvent) {
         let schema = self
@@ -224,6 +272,13 @@ impl StagingLog {
 
         builder.build()
     }
+}
+
+fn seed(attributes: &[AttributeDefinition]) -> BTreeMap<String, AttrType> {
+    attributes
+        .iter()
+        .map(|a| (a.name.clone(), a.value_type))
+        .collect()
 }
 
 fn attr_defs(attrs: &BTreeMap<String, AttrType>) -> Vec<AttributeDefinition> {
