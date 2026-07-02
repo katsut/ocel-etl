@@ -51,28 +51,8 @@ pub struct StagingLog {
     object_schema: BTreeMap<String, BTreeMap<String, AttrType>>,
 }
 
-fn kind_of(value: &AttrValue) -> AttrType {
-    match value {
-        AttrValue::String(_) => AttrType::String,
-        AttrValue::Integer(_) => AttrType::Integer,
-        AttrValue::Float(_) => AttrType::Float,
-        AttrValue::Boolean(_) => AttrType::Boolean,
-        AttrValue::Time(_) => AttrType::Time,
-    }
-}
-
-fn to_text(value: &AttrValue) -> String {
-    match value {
-        AttrValue::String(s) => s.clone(),
-        AttrValue::Integer(i) => i.to_string(),
-        AttrValue::Float(f) => f.to_string(),
-        AttrValue::Boolean(b) => b.to_string(),
-        AttrValue::Time(t) => t.to_rfc3339(),
-    }
-}
-
 fn observe(schema: &mut BTreeMap<String, AttrType>, name: &str, value: &AttrValue) {
-    let observed = kind_of(value);
+    let observed = value.attr_type();
     match schema.get(name) {
         None => {
             schema.insert(name.to_owned(), observed);
@@ -86,10 +66,10 @@ fn observe(schema: &mut BTreeMap<String, AttrType>, name: &str, value: &AttrValu
 
 /// Coerce a value to its (possibly degraded) declared type.
 fn conform(value: AttrValue, declared: AttrType) -> AttrValue {
-    if kind_of(&value) == declared {
+    if value.attr_type() == declared {
         value
     } else {
-        AttrValue::String(to_text(&value))
+        AttrValue::String(value.to_text())
     }
 }
 
@@ -198,7 +178,7 @@ impl StagingLog {
                 .map(|(name, value)| {
                     let declared = schema
                         .and_then(|s| s.get(&name).copied())
-                        .unwrap_or_else(|| kind_of(&value));
+                        .unwrap_or_else(|| value.attr_type());
                     EventAttribute {
                         value: conform(value, declared),
                         name,
@@ -222,7 +202,7 @@ impl StagingLog {
                 .map(|(name, value, time)| {
                     let declared = schema
                         .and_then(|s| s.get(&name).copied())
-                        .unwrap_or_else(|| kind_of(&value));
+                        .unwrap_or_else(|| value.attr_type());
                     ObjectAttribute {
                         value: conform(value, declared),
                         name,
