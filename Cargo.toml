@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/katsut/ocel-etl"
-description = "Generic ETL pipeline engine for OCEL 2.0 process mining"
+description = "ETL engine for OCEL 2.0 process mining: staging representation with a validation gate"
+documentation = "https://docs.rs/ocel-etl"
+readme = "README.md"
+keywords = ["ocel", "process-mining", "etl", "event-log", "ocel2"]
+categories = ["data-structures"]
 
 [dependencies]
 ocel = "0.1.2"
