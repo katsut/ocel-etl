@@ -168,3 +168,30 @@ fn gated_log_round_trips_through_ocel_io() {
     assert_eq!(ocel_log, back);
     let _ = std::fs::remove_file(&path);
 }
+
+/// Once gated, re-staging and re-gating reproduces the log unchanged
+/// (the basis for incremental sync).
+#[test]
+fn from_ocel_round_trips_after_first_gate() {
+    let mut staging = StagingLog::new();
+    staging.upsert_object("t1", "task");
+    staging.add_object_attribute("t1", "status", AttrValue::String("Open".into()), ts(0));
+    staging.add_object_attribute("t1", "estimate", AttrValue::Integer(3), ts(0));
+    staging.upsert_object("t2", "task");
+    staging.add_o2o("t1", "t2", "parent of");
+    staging.add_event(StagingEvent {
+        attributes: vec![("changer".into(), AttrValue::String("Alice".into()))],
+        ..event("e1", "status_changed", 100, vec![("t1", "task")])
+    });
+    let first = staging.into_ocel().unwrap();
+
+    let second = StagingLog::from_ocel(first.clone()).into_ocel().unwrap();
+    assert_eq!(first, second);
+
+    // and merging additional data on top still works
+    let mut merged = StagingLog::from_ocel(first);
+    merged.add_event(event("e2", "status_changed", 200, vec![("t2", "task")]));
+    let log = merged.into_ocel().unwrap();
+    assert_eq!(log.events.len(), 2);
+    assert_eq!(log.validate(), Ok(()));
+}
