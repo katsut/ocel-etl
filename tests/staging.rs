@@ -195,3 +195,120 @@ fn from_ocel_round_trips_after_first_gate() {
     assert_eq!(log.events.len(), 2);
     assert_eq!(log.validate(), Ok(()));
 }
+
+/// Applying an alias table: two ids become one canonical object, references
+/// follow, appended duplicate observations collapse at the gate.
+#[test]
+fn map_object_ids_merges_aliases_and_rewrites_references() {
+    let mut staging = StagingLog::new();
+    staging.upsert_object("alice@corp", "user");
+    staging.upsert_object("@alice", "user");
+    staging.upsert_object("task-1", "task");
+    staging.add_object_attribute(
+        "alice@corp",
+        "team",
+        AttrValue::String("core".into()),
+        ts(0),
+    );
+    staging.add_object_attribute("@alice", "team", AttrValue::String("core".into()), ts(0));
+    staging.add_o2o("task-1", "@alice", "assigned to");
+    staging.add_event(event("e1", "commented", 100, vec![("alice@corp", "actor")]));
+    staging.add_event(event("e2", "commented", 200, vec![("@alice", "actor")]));
+
+    staging.map_object_ids(|id| {
+        if id == "alice@corp" || id == "@alice" {
+            "user:alice".into()
+        } else {
+            id.to_owned()
+        }
+    });
+
+    let log = staging.into_ocel().unwrap();
+    assert_eq!(log.validate(), Ok(()));
+    assert_eq!(log.objects.len(), 2); // user:alice + task-1
+    let alice = log.objects.iter().find(|o| o.id == "user:alice").unwrap();
+    assert_eq!(alice.object_type, "user");
+    // the two identical (name, value, time) observations merged into one
+    assert_eq!(alice.attributes.len(), 1);
+    // O2O and both E2O references were re-pointed
+    assert!(log
+        .o2o()
+        .any(|r| r.source_id == "task-1" && r.target_id == "user:alice"));
+    assert!(log
+        .events
+        .iter()
+        .all(|e| e.relationships.iter().all(|r| r.object_id == "user:alice")));
+}
+
+/// A placeholder (reference-only) id merging into a typed object keeps the
+/// non-empty type regardless of merge order.
+#[test]
+fn map_object_ids_keeps_the_first_non_empty_type() {
+    let mut staging = StagingLog::new();
+    // "ghost" exists only as a reference target (placeholder, empty type)
+    staging.add_o2o("task-1", "ghost", "related to");
+    staging.upsert_object("task-1", "task");
+    staging.upsert_object("real", "user");
+
+    staging.map_object_ids(|id| {
+        if id == "ghost" || id == "real" {
+            "user:merged".into()
+        } else {
+            id.to_owned()
+        }
+    });
+
+    let log = staging.into_ocel().unwrap();
+    let merged = log.objects.iter().find(|o| o.id == "user:merged").unwrap();
+    assert_eq!(merged.object_type, "user");
+}
+
+/// Renaming an event type via `map_events` replaces the old declaration.
+#[test]
+fn map_events_rename_updates_the_schema() {
+    let mut staging = StagingLog::new();
+    staging.upsert_object("t1", "task");
+    staging.add_event(event("e1", "labeled", 100, vec![("t1", "subject")]));
+    staging.add_event(event("e2", "unlabeled", 200, vec![("t1", "subject")]));
+
+    staging.map_events(|e| {
+        if e.event_type == "labeled" || e.event_type == "unlabeled" {
+            e.event_type = "triage".into();
+        }
+    });
+
+    let log = staging.into_ocel().unwrap();
+    assert!(log.events.iter().all(|e| e.event_type == "triage"));
+    let names: Vec<&str> = log.event_types.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["triage"]);
+}
+
+/// Dropping the last event of a type removes the type from the log.
+#[test]
+fn retain_events_drops_empty_types() {
+    let mut staging = StagingLog::new();
+    staging.upsert_object("t1", "task");
+    staging.add_event(event("e1", "comment", 100, vec![("t1", "subject")]));
+    staging.add_event(event("e2", "close", 200, vec![("t1", "subject")]));
+
+    staging.retain_events(|e| e.event_type != "comment");
+
+    let log = staging.into_ocel().unwrap();
+    assert_eq!(log.events.len(), 1);
+    let names: Vec<&str> = log.event_types.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["close"]);
+}
+
+/// Same value re-observed at a different time is a real change, not a dupe.
+#[test]
+fn dedupe_keeps_distinct_times_of_the_same_value() {
+    let mut staging = StagingLog::new();
+    staging.upsert_object("t1", "task");
+    staging.add_object_attribute("t1", "status", AttrValue::String("open".into()), ts(0));
+    staging.add_object_attribute("t1", "status", AttrValue::String("open".into()), ts(50));
+    staging.add_object_attribute("t1", "status", AttrValue::String("open".into()), ts(0));
+
+    let log = staging.into_ocel().unwrap();
+    let task = log.objects.iter().find(|o| o.id == "t1").unwrap();
+    assert_eq!(task.attributes.len(), 2); // ts(0) duplicate collapsed, ts(50) kept
+}

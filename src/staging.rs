@@ -179,6 +179,64 @@ impl StagingLog {
             .push((target_id.to_owned(), qualifier.to_owned()));
     }
 
+    /// Re-key every object id; `E2O` and `O2O` references follow. Old ids
+    /// mapping to the same new id **merge**: attribute observations and
+    /// relations append, the first non-empty object type wins. Identity
+    /// resolution is applying an alias table; anonymization is applying a
+    /// hash — both are instances of this.
+    pub fn map_object_ids(&mut self, f: impl Fn(&str) -> String) {
+        let old_ids = std::mem::take(&mut self.object_ids);
+        let old_objects = std::mem::take(&mut self.objects);
+        self.object_index.clear();
+        for (old_id, mut object) in old_ids.into_iter().zip(old_objects) {
+            for (target, _) in &mut object.relations {
+                *target = f(target);
+            }
+            let index = self.object_slot(&f(&old_id));
+            let slot = &mut self.objects[index];
+            if slot.object_type.is_empty() {
+                slot.object_type = object.object_type;
+            }
+            slot.attributes.append(&mut object.attributes);
+            slot.relations.append(&mut object.relations);
+        }
+        for event in &mut self.events {
+            for (target, _) in &mut event.relations {
+                *target = f(target);
+            }
+        }
+    }
+
+    /// Rewrite every event in place (rename types, edit attributes, re-point
+    /// relations). The event schema is rebuilt from the mapped events, so a
+    /// renamed type replaces its old entry instead of leaving it behind.
+    pub fn map_events(&mut self, mut f: impl FnMut(&mut StagingEvent)) {
+        for event in &mut self.events {
+            f(event);
+        }
+        self.rebuild_event_schema();
+    }
+
+    /// Keep only events matching the predicate. The event schema is rebuilt,
+    /// so a type whose last event is dropped disappears from the log.
+    pub fn retain_events(&mut self, mut pred: impl FnMut(&StagingEvent) -> bool) {
+        self.events.retain(|event| pred(event));
+        self.rebuild_event_schema();
+    }
+
+    fn rebuild_event_schema(&mut self) {
+        self.event_schema.clear();
+        for event in &self.events {
+            let schema = self
+                .event_schema
+                .entry(event.event_type.clone())
+                .or_default();
+            for (name, value) in &event.attributes {
+                observe(schema, name, value);
+            }
+        }
+    }
+
     fn object_slot(&mut self, id: &str) -> usize {
         if let Some(&index) = self.object_index.get(id) {
             return index;
@@ -258,6 +316,14 @@ impl StagingLog {
                     }
                 })
                 .collect();
+            // merges (map_object_ids, re-staged increments) make exact
+            // duplicate observations likely — one (name, value, time) is one
+            // observation; first occurrence keeps its position. Post-conform,
+            // one attribute name has one declared type, so the value's text
+            // is a faithful key.
+            let mut seen: std::collections::HashSet<(String, String, DateTime<Utc>)> =
+                std::collections::HashSet::new();
+            attributes.retain(|a| seen.insert((a.name.clone(), a.value.to_text(), a.time)));
             attributes.sort_by(|a, b| a.time.cmp(&b.time).then_with(|| a.name.cmp(&b.name)));
             let mut relations = object.relations;
             relations.sort();
